@@ -60,4 +60,14 @@ public class ProduitController {
                                                    @Valid @RequestBody ReservationStockDto reservation) {
         return ResponseEntity.ok(produitMapper.toDto(produitService.reserverStock(id, reservation.getQuantite())));
     }
+
+    @PostMapping("/updatestock")
+    public ResponseEntity<Void> updatestock(@RequestBody ReservationStockDto reservation) {
+        if (reservation != null && reservation.getListeProduitIdQuantite() != null) {
+            reservation.getListeProduitIdQuantite().forEach((produitId, qte) -> {
+                produitService.reserverStock(produitId, qte);
+            });
+        }
+        return ResponseEntity.ok().build();
+    }
 }

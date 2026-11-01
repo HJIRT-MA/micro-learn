@@ -2,37 +2,40 @@ package com.ecom.commandesservice.service;
 
 import com.ecom.commandesservice.dto.CommandeDtoFull;
 import com.ecom.commandesservice.dto.LigneCommandeDtoFull;
+import com.ecom.commandesservice.dto.NotificationEmailDto;
 import com.ecom.commandesservice.entite.Commande;
 import com.ecom.commandesservice.entite.LigneCommande;
 import com.ecom.commandesservice.enums.StatutCommande;
 import com.ecom.commandesservice.exception.RessourceIntrouvableException;
-import com.ecom.commandesservice.feignClient.ClientDto;
-import com.ecom.commandesservice.feignClient.ClientsRequest;
-import com.ecom.commandesservice.feignClient.ProduitDto;
-import com.ecom.commandesservice.feignClient.ProduitRequest;
+import com.ecom.commandesservice.feignClient.*;
 import com.ecom.commandesservice.mapper.CommandeMapperDetailFull;
+import com.ecom.commandesservice.messaging.NotificationPublisher;
 import com.ecom.commandesservice.repository.CommandeRepository;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.math.BigDecimal;
-import java.util.Date;
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
 
 @Service
+@Slf4j
 public class CommandeService {
     private final CommandeRepository commandeRepository;
     private final ClientsRequest clientsRequest;
     private final ProduitRequest produitRequest;
     private final CommandeMapperDetailFull commandeMapperDetailFull;
+    private final NotificationPublisher notificationPublisher;
 
 
-    public CommandeService(CommandeRepository commandeRepository, ClientsRequest clientsRequest, ProduitRequest produitRequest, CommandeMapperDetailFull commandeMapperDetailFull) {
+    public CommandeService(CommandeRepository commandeRepository, ClientsRequest clientsRequest, ProduitRequest produitRequest, CommandeMapperDetailFull commandeMapperDetailFull,NotificationPublisher notificationPublisher) {
         this.commandeRepository = commandeRepository;
         this.clientsRequest = clientsRequest;
         this.produitRequest = produitRequest;
         this.commandeMapperDetailFull = commandeMapperDetailFull;
+        this.notificationPublisher = notificationPublisher;
     }
 
     public List<Commande> listallCommande() {
@@ -81,7 +84,7 @@ public class CommandeService {
         if (!Integer.valueOf(1).equals(client.getEtat())) {
             throw new IllegalArgumentException("Client suspendu");
         }
-
+        Map<Long, Integer> listeProduitIdQuantite= new HashMap<>();
         BigDecimal prixTotal = BigDecimal.ZERO;
         for (LigneCommande ligne : commande.getLignesCommande()) {
             ProduitDto produit = produitRequest.getProduitById(ligne.getProduitId());
@@ -96,11 +99,37 @@ public class CommandeService {
             ligne.setSousTotal(sousTotal);
             ligne.setCommande(commande);
             prixTotal = prixTotal.add(sousTotal);
+            listeProduitIdQuantite.put(ligne.getProduitId(), ligne.getQuantite());
         }
         commande.setPrixTotal(prixTotal);
-
         commande.setDateCommande(new Date());
         commande.setStatut(StatutCommande.EN_ATTENTE);
-        return  commandeRepository.save(commande);
+        Commande savedccommande=commandeRepository.save(commande);
+
+        NotificationEmailDto emailDto = new NotificationEmailDto(
+                client.getEmail(),
+                "Commande n° " + savedccommande.getId() + " enregistrée",
+                "Bonjour " + client.getName()
+                        + ", votre commande n° " + savedccommande.getId()
+                        + " a été enregistrée. Montant : "
+                        + savedccommande.getPrixTotal() + "."
+        );
+
+        ReservationStockDto reservation = new ReservationStockDto(listeProduitIdQuantite);
+        afterCommit(() -> produitRequest.updatestock(reservation));
+        afterCommit(() -> notificationPublisher.envoyer(emailDto));
+
+        return savedccommande;
+    }
+
+    private void afterCommit(Runnable action) {
+        TransactionSynchronizationManager.registerSynchronization(
+                new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        action.run();
+                    }
+                }
+        );
     }
 }
