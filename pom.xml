@@ -12,5 +12,9 @@
         <module>clients-service</module>
         <module>catalogue-service</module>
         <module>commandes-service</module>
+        <module>service-eureka</module>
+        <module>gateway</module>
+        <module>config-service</module>
+        <module>notification-service</module>
     </modules>
 </project>
